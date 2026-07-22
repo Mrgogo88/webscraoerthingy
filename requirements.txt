@@ -1,0 +1,18 @@
+# Core
+python-dotenv>=1.0.1
+SQLAlchemy>=2.0.30
+
+# Business discovery (OpenStreetMap)
+requests>=2.32.0
+
+# Website crawling
+playwright>=1.44.0
+beautifulsoup4>=4.12.3
+lxml>=5.2.0
+
+# Dashboard
+streamlit>=1.35.0
+pandas>=2.2.0
+
+# Testing
+pytest>=8.2.0
