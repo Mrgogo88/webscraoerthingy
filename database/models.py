@@ -1,8 +1,9 @@
 """SQLAlchemy ORM models for LeadFinder.
 
 Tables:
-    businesses        - local businesses discovered via OpenStreetMap
-    website_analysis  - crawl + Lighthouse audit results for a business website
+    businesses            - businesses discovered via OpenStreetMap/Google/online sources
+    website_analysis      - crawl + Lighthouse audit results for a business website
+    duplicate_suggestions - candidate near-duplicate business pairs for manual review
 """
 
 from __future__ import annotations
@@ -56,6 +57,23 @@ class Business(Base):
     longitude: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
+    # Lead source: 'local' (OSM/Google) | 'online' (Etsy/Shopify/link-in-bio) | 'both'
+    lead_source_type: Mapped[str | None] = mapped_column(String(20))
+    # 'etsy' | 'shopify' | 'linktree' | 'beacons' | etc. — set when website_status
+    # is 'storefront_only' or 'linkinbio_only'
+    online_presence_platform: Mapped[str | None] = mapped_column(String(40))
+
+    # Google Places review signals (Phase 3 — Lead Quality Score inputs)
+    google_rating: Mapped[float | None] = mapped_column(Float)
+    google_rating_count: Mapped[int | None] = mapped_column(Integer)
+    google_last_review_date: Mapped[datetime | None] = mapped_column(DateTime)
+    # Tri-state: None = not checked, True/False = Ad Library lookup result
+    meta_ads_active: Mapped[bool | None] = mapped_column(Boolean)
+
+    # Lightweight CRM pipeline status: New -> Contacted -> Replied -> Won -> Passed
+    pipeline_status: Mapped[str | None] = mapped_column(String(20))
+    pipeline_status_updated_at: Mapped[datetime | None] = mapped_column(DateTime)
+
     analysis: Mapped["WebsiteAnalysis | None"] = relationship(
         back_populates="business",
         uselist=False,
@@ -106,6 +124,42 @@ class WebsiteAnalysis(Base):
     website_score: Mapped[int | None] = mapped_column(Integer)
     lead_priority: Mapped[str | None] = mapped_column(String(40))
 
+    # Granular sub-scores (0-100 each), diagnostic detail behind website_score
+    mobile_score: Mapped[int | None] = mapped_column(Integer)
+    speed_score: Mapped[int | None] = mapped_column(Integer)
+    security_score: Mapped[int | None] = mapped_column(Integer)
+    design_freshness_score: Mapped[int | None] = mapped_column(Integer)
+    seo_basics_score: Mapped[int | None] = mapped_column(Integer)
+    has_ecommerce: Mapped[bool | None] = mapped_column(Boolean)
+    ecommerce_score: Mapped[int | None] = mapped_column(Integer)  # meaningful only if has_ecommerce
+    ecommerce_signals: Mapped[str | None] = mapped_column(Text)  # JSON list
+
+    # SSL/certificate check (ssl_valid=None means "couldn't verify", never a penalty)
+    ssl_valid: Mapped[bool | None] = mapped_column(Boolean)
+    ssl_error: Mapped[str | None] = mapped_column(Text)
+    ssl_days_until_expiry: Mapped[int | None] = mapped_column(Integer)
+
+    # SEO basics
+    alt_text_coverage: Mapped[float | None] = mapped_column(Float)  # 0.0-1.0
+    canonical_present: Mapped[bool | None] = mapped_column(Boolean)
+    robots_meta_blocking: Mapped[bool | None] = mapped_column(Boolean)
+
+    # Wayback Machine design-freshness signal (best-effort)
+    wayback_snapshot_year: Mapped[int | None] = mapped_column(Integer)
+    wayback_diff_summary: Mapped[str | None] = mapped_column(Text)
+
+    # Extra Lighthouse audit-level detail beyond the 4 category scores (JSON dict)
+    lighthouse_audit_details: Mapped[str | None] = mapped_column(Text)
+
+    # Ad-spend signals detected on the crawled page
+    meta_pixel_detected: Mapped[bool | None] = mapped_column(Boolean)
+    google_ads_tag_detected: Mapped[bool | None] = mapped_column(Boolean)
+    ad_tracking_signals: Mapped[str | None] = mapped_column(Text)  # JSON list
+
+    # Contact enrichment (both explicitly unverified guesses)
+    guessed_emails: Mapped[str | None] = mapped_column(Text)  # JSON list
+    owner_name_guess: Mapped[str | None] = mapped_column(Text)
+
     # Crawl bookkeeping
     crawl_error: Mapped[str | None] = mapped_column(Text)  # set when the crawl failed
     analyzed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -129,5 +183,51 @@ class WebsiteAnalysis(Base):
     def legacy_signals_list(self) -> list[str]:
         return json.loads(self.legacy_signals) if self.legacy_signals else []
 
+    @property
+    def ecommerce_signals_list(self) -> list[str]:
+        return json.loads(self.ecommerce_signals) if self.ecommerce_signals else []
+
+    @property
+    def ad_tracking_signals_list(self) -> list[str]:
+        return json.loads(self.ad_tracking_signals) if self.ad_tracking_signals else []
+
+    @property
+    def guessed_emails_list(self) -> list[str]:
+        return json.loads(self.guessed_emails) if self.guessed_emails else []
+
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<WebsiteAnalysis id={self.id} url={self.url!r} score={self.website_score}>"
+
+
+class DuplicateSuggestion(Base):
+    """A candidate pair of near-duplicate business listings for manual review.
+
+    Always inserted with business_id_a < business_id_b so the unique
+    constraint catches a pair regardless of discovery order.
+    """
+
+    __tablename__ = "duplicate_suggestions"
+    __table_args__ = (
+        UniqueConstraint("business_id_a", "business_id_b", name="uq_duplicate_pair"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    business_id_a: Mapped[int] = mapped_column(
+        ForeignKey("businesses.id", ondelete="CASCADE"), index=True
+    )
+    business_id_b: Mapped[int] = mapped_column(
+        ForeignKey("businesses.id", ondelete="CASCADE"), index=True
+    )
+    name_similarity: Mapped[float] = mapped_column(Float)
+    distance_meters: Mapped[float | None] = mapped_column(Float)
+    match_reason: Mapped[str | None] = mapped_column(String(200))
+    # 'pending' | 'confirmed_duplicate' | 'not_duplicate'
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return (
+            f"<DuplicateSuggestion a={self.business_id_a} b={self.business_id_b} "
+            f"status={self.status!r}>"
+        )
