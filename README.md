@@ -206,6 +206,43 @@ python -m pytest tests/ -v
 The suite covers the database models, OSM response parsing, HTML signal
 extraction, and the scoring algorithm — all offline with no network calls.
 
+## Deployment
+
+LeadFinder **cannot run on serverless hosts like Vercel.** It needs a
+persistent process (Streamlit's WebSocket connection), a real browser
+(Playwright's headless Chromium for crawling), a Node CLI shell-out
+(Lighthouse), and a writable disk (the SQLite database + screenshots) —
+none of which fit a stateless, short-lived function. Use a container host
+instead. A `Dockerfile` is included and works on any of these:
+
+**Render**
+1. Push this repo to GitHub/GitLab and connect it in the Render dashboard
+   as a Blueprint (`render.yaml` is already set up with a `/data` disk).
+2. Set `GOOGLE_PLACES_API_KEY` in the service's environment if you're using
+   it (optional).
+3. **Persistent disks require a paid instance type** (Starter or above) —
+   Render's free tier has no disk support, so the leads database would be
+   wiped on every restart/deploy on the free plan.
+
+**Railway**
+1. Push this repo and create a new project from it — Railway auto-detects
+   the `Dockerfile` (`railway.json` pins the build to it explicitly).
+2. Attach a **Volume** (Railway dashboard → your service → Volumes) mounted
+   at `/data` so the database and screenshots survive restarts/redeploys.
+   Railway's volumes work on its free trial tier, unlike Render's disks.
+3. Set `GOOGLE_PLACES_API_KEY` as a service variable if needed.
+
+**Any Docker host (Fly.io, a VPS, etc.)**
+```bash
+docker build -t leadfinder .
+docker run -p 8501:8501 -v leadfinder_data:/data \
+    -e GOOGLE_PLACES_API_KEY=your-key-if-any \
+    leadfinder
+```
+Mount a volume at `/data` the same way — that's where `DATABASE_PATH`,
+`SCREENSHOT_DIR`, and `LOG_FILE` all point by default inside the container
+(see the `ENV` lines in the `Dockerfile`).
+
 ## Data accuracy — what to expect
 
 OpenStreetMap is community-maintained: coverage is thinner than Google

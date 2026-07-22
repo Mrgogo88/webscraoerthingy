@@ -1,0 +1,27 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# Deploy: connect this repo in the Render dashboard and it will pick up this
+# file automatically ("New +" -> "Blueprint").
+#
+# NOTE: persistent disks require a paid instance type (Starter or above) —
+# Render's free tier has no disk support, so the SQLite database and
+# screenshots would be wiped on every restart/deploy. Use Railway (below)
+# instead if you want to stay on a free tier with persistent storage.
+services:
+  - type: web
+    name: leadfinder
+    env: docker
+    plan: starter
+    healthCheckPath: /
+    envVars:
+      - key: GOOGLE_PLACES_API_KEY
+        sync: false
+      - key: DATABASE_PATH
+        value: /data/leads.db
+      - key: SCREENSHOT_DIR
+        value: /data/screenshots
+      - key: LOG_FILE
+        value: /data/leadfinder.log
+    disk:
+      name: leadfinder-data
+      mountPath: /data
+      sizeGB: 1
